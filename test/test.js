@@ -1101,6 +1101,9 @@
   test('readable', function() {
     var u = new URI('http://foo:bar@www.xn--exmple-cua.org/hello%20world/ä.html?foo%5B%5D=b+är#fragment');
     equal(u.readable(), 'http://www.exämple.org/hello world/ä.html?foo[]=b är#fragment', 'readable URL');
+
+    u = new URI('urn:people:philsoophers:%CE%A3%CF%89%CE%BA%CF%81%CE%AC%CF%84%CE%B7%CF%82');
+    equal(u.readable(), 'urn:people:philsoophers:Σωκράτης');
   });
 
   module('resolving URLs');
@@ -1559,6 +1562,32 @@
     equal(u.path(), '/%E4.html', 'convert iso8859');
     u.unicode();
     equal(u.path(), '/%C3%A4.html', 'convert unicode');
+  });
+  test('IRIs', function() {
+    var u = new URI('http://www.üñîçødé.com/páth/with/non-ÅSCII/characters/and%2For spaces/index.html?quëry=string&paràm2=%26');
+
+    URI.iri();
+    u.normalize();
+    equal(u.toString(), 'http://www.üñîçødé.com/páth/with/non-ÅSCII/characters/and%2For%20spaces/index.html?quëry=string&paràm2=%26',
+      'IRI normalization keeps non-ASCII characters but encodes spaces');
+
+    URI.unicode();
+    u.normalize();
+    equal(u.toString(), 'http://www.xn--d-5fahro8bya.com/p%C3%A1th/with/non-%C3%85SCII/characters/and%2For%20spaces/index.html?qu%C3%ABry=string&par%C3%A0m2=%26',
+      'ensure known normalization from IRI to non-IRI');
+
+    URI.iri();
+    u.normalize();
+    equal(u.toString(), 'http://www.üñîçødé.com/páth/with/non-ÅSCII/characters/and%2For%20spaces/index.html?quëry=string&paràm2=%26',
+      'normalized unicode URIs translate back to IRIs');
+
+    URI.unicode();
+
+    // Let's test with a right-to-left language to make sure that works. This is the URL to the
+    // main page of the Hebrew-language Wikipedia
+    u = new URI('http://he.wikipedia.org/wiki/%D7%A2%D7%9E%D7%95%D7%93_%D7%A8%D7%90%D7%A9%D7%99');
+    u.iri();
+    equal(u.toString(), 'http://he.wikipedia.org/wiki/עמוד_ראשי');
   });
   test('bad charset in QueryString', function() {
     var uri = new URI('http://www.google.com.hk/search?q=pennytel%20downloads&sa=%20%CB%D1%20%CB%F7%20&forid=1&prog=aff&ie=GB2312&oe=GB2312&safe=active&source=sdo_sb_html&hl=zh-CN');

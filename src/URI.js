@@ -259,16 +259,84 @@
       .replace(/[!'()*]/g, escapeForDumbFirefox36)
       .replace(/\*/g, '%2A');
   }
-  URI.encode = strictEncodeURIComponent;
-  URI.decode = decodeURIComponent;
+
+  // Drawn from https://www.ietf.org/rfc/rfc3987.txt
+  function _isIriCodePoint(point) {
+    // Unless otherwise noted, all these hex ranges are defined in RFC 3987 under the
+    // ucschar portion of the grammar.
+    return (
+        point === 0x00002d || point === 0x0002E || // -, .
+        point === 0x00005F || point === 0x0007E || // _, ~
+        (point >= 0x000030 && point < 0x000040) || // ASCII Digits
+        (point >= 0x000041 && point < 0x00005B) || // ASCII Uppercase
+        (point >= 0x000061 && point < 0x00007B) || // ASCII Lowercase
+        (point >= 0x0000A0 && point < 0x00D800) ||
+        (point >= 0x00E000 && point < 0x00F8FF) || // iprivate
+        (point >= 0x00F900 && point < 0x00FDD0) ||
+        (point >= 0x00FDF0 && point < 0x00FFF0) ||
+        (point >= 0x010000 && point < 0x01FFFE) ||
+        (point >= 0x020000 && point < 0x02FFFE) ||
+        (point >= 0x030000 && point < 0x03FFFE) ||
+        (point >= 0x040000 && point < 0x04FFFE) ||
+        (point >= 0x050000 && point < 0x05FFFE) ||
+        (point >= 0x060000 && point < 0x06FFFE) ||
+        (point >= 0x070000 && point < 0x07FFFE) ||
+        (point >= 0x080000 && point < 0x08FFFE) ||
+        (point >= 0x090000 && point < 0x09FFFE) ||
+        (point >= 0x0A0000 && point < 0x0AFFFE) ||
+        (point >= 0x0B0000 && point < 0x0BFFFE) ||
+        (point >= 0x0C0000 && point < 0x0CFFFE) ||
+        (point >= 0x0D0000 && point < 0x0DFFFE) ||
+        (point >= 0x0E0000 && point < 0x0EFFFE) ||
+        (point >= 0x0F0000 && point < 0x0FFFFE) || // iprivate
+        (point >= 0x100000 && point < 0x10FFFE)    // iprivate
+      );
+  }
+
+  // IRIs are "unicode" (i.e., they use UTF-8 for %-encoding) URIs, but with a far greater range of
+  // non-ASCII characters that are allowed. Note that ISO-8859 IRIs are an impossibility; ISO-8859
+  // cannot represent the full range of unicode characters.
+  function encodeIRIComponent(string) {
+    var inputCodePoints = punycode.ucs2.decode(string);
+    var output = '';
+    for (var i = 0; i < inputCodePoints.length; i++) {
+      var codePoint = inputCodePoints[i];
+      if (_isIriCodePoint(codePoint)) {
+        output += punycode.ucs2.encode([codePoint]);
+      } else {
+        var asString = punycode.ucs2.encode([codePoint]);
+        output += strictEncodeURIComponent(asString);
+      }
+    }
+    return output;
+  }
+
+  function recodeIRIHostname(string) {
+    if (URI.punycode_expression.test(string))
+    {
+      string = punycode.toUnicode(string);
+    }
+    return encodeIRIComponent(string);
+  }
+
+  URI._defaultRecodeHostname = punycode ? punycode.toASCII : function(string) { return string; };
   URI.iso8859 = function() {
+    URI.recodeHostname = URI._defaultRecodeHostname;
     URI.encode = escape;
     URI.decode = unescape;
   };
   URI.unicode = function() {
+    URI.recodeHostname = URI._defaultRecodeHostname;
     URI.encode = strictEncodeURIComponent;
     URI.decode = decodeURIComponent;
   };
+  URI.iri = function() {
+    URI.recodeHostname = recodeIRIHostname;
+    URI.encode = encodeIRIComponent;
+    URI.decode = decodeURIComponent;
+  };
+  // By default, start in unicode mode.
+  URI.unicode();
   URI.characters = {
     pathname: {
       encode: {
@@ -1705,8 +1773,9 @@
   };
   p.normalizeHostname = function(build) {
     if (this._parts.hostname) {
-      if (this.is('IDN') && punycode) {
-        this._parts.hostname = punycode.toASCII(this._parts.hostname);
+      // If this is an international domain name, or if it was an IDN before it was punycoded
+      if (this.is('IDN') || this.is('punycode')) {
+        this._parts.hostname = URI.recodeHostname(this._parts.hostname);
       } else if (this.is('IPv6') && IPv6) {
         this._parts.hostname = IPv6.best(this._parts.hostname);
       }
@@ -1819,37 +1888,31 @@
   p.normalizeSearch = p.normalizeQuery;
   p.normalizeHash = p.normalizeFragment;
 
-  p.iso8859 = function() {
-    // expect unicode input, iso8859 output
-    var e = URI.encode;
-    var d = URI.decode;
+  function _generateNormalizer(hostnameRecoder, encoder, decoder) {
+    return function() {
+      var r = URI.recodeHostname
+      var e = URI.encode;
+      var d = URI.decode;
 
-    URI.encode = escape;
-    URI.decode = decodeURIComponent;
-    try {
-      this.normalize();
-    } finally {
-      URI.encode = e;
-      URI.decode = d;
-    }
-    return this;
-  };
+      URI.encode = encoder;
+      URI.decode = decoder;
+      try {
+        this.normalize();
+      } finally {
+        URI.recodeHostname = r;
+        URI.encode = e;
+        URI.decode = d;
+      }
+      return this;
+    };
+  }
 
-  p.unicode = function() {
-    // expect iso8859 input, unicode output
-    var e = URI.encode;
-    var d = URI.decode;
-
-    URI.encode = strictEncodeURIComponent;
-    URI.decode = unescape;
-    try {
-      this.normalize();
-    } finally {
-      URI.encode = e;
-      URI.decode = d;
-    }
-    return this;
-  };
+  // expect unicode input, iso8859 output
+  p.iso8859 = _generateNormalizer(URI._defaultRecodeHostname, escape, decodeURIComponent);
+  // expect iso8859 input, unicode output
+  p.unicode = _generateNormalizer(URI._defaultRecodeHostname, strictEncodeURIComponent, unescape);
+  // expect unicode input, IRI output
+  p.iri = _generateNormalizer(recodeIRIHostname, encodeIRIComponent, decodeURIComponent);
 
   p.readable = function() {
     var uri = this.clone();
@@ -1857,7 +1920,7 @@
     uri.username('').password('').normalize();
     var t = '';
     if (uri._parts.protocol) {
-      t += uri._parts.protocol + '://';
+      t += uri._parts.protocol + (uri._parts.urn ? ':' : '://');
     }
 
     if (uri._parts.hostname) {
